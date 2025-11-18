@@ -33,7 +33,6 @@ ROOT_DIR = "."  # 기본 시작 폴더 (커맨드라인 인수로 덮어쓸 수 
 TARGET_PREFIX = "흑백-"  # 출력 파일 접두사
 TARGET_GRAYSCALE_WIDTH_PX = 4096  # PyMuPDF 래스터 변환 시 목표 가로 픽셀
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}  # 지원 이미지 확장자
-IMAGES_PDF_NAME = "흑백-images.pdf"  # 이미지들을 묶은 PDF 파일명
 # ----------------------
 
 
@@ -110,10 +109,10 @@ def convert_with_pymupdf(src: str, dst: str) -> None:
         doc.close()
 
 
-def convert_images_to_pdf(image_paths: list[str], output_pdf: str) -> None:
+def convert_image_to_pdf(image_path: str, output_pdf: str) -> None:
     """
-    여러 이미지를 흑백으로 변환하여 하나의 PDF로 결합.
-    각 이미지는 원본 크기 그대로 한 페이지를 차지합니다 (잘리지 않음).
+    하나의 이미지를 흑백으로 변환하여 PDF로 저장.
+    이미지는 원본 크기 그대로 한 페이지를 차지합니다 (잘리지 않음).
     """
     try:
         from PIL import Image
@@ -127,34 +126,27 @@ def convert_images_to_pdf(image_paths: list[str], output_pdf: str) -> None:
 
     pdf_doc = fitz.open()
     
-    for img_path in image_paths:
-        try:
-            # Pillow로 이미지 열고 그레이스케일 변환
-            img = Image.open(img_path)
-            if img.mode != "L":
-                img = img.convert("L")
-            
-            # 임시로 PNG 바이트로 변환 (PyMuPDF에 삽입하기 위해)
-            import io
-            img_bytes = io.BytesIO()
-            img.save(img_bytes, format="PNG")
-            img_bytes.seek(0)
-            
-            # 이미지 크기에 맞춰 PDF 페이지 생성 (72 DPI 기준, Pillow 픽셀 → 포인트)
-            # 이미지가 잘리지 않도록 원본 크기 그대로 사용
-            width_pt = img.width * 72 / 96  # 96 DPI 가정 (일반적 화면 DPI)
-            height_pt = img.height * 72 / 96
-            
-            page = pdf_doc.new_page(width=width_pt, height=height_pt)
-            rect = fitz.Rect(0, 0, width_pt, height_pt)
-            page.insert_image(rect, stream=img_bytes.read())
-            
-        except Exception as e:
-            print(f"[경고] 이미지 처리 실패, 건너뜀: {img_path} ({e})", file=sys.stderr)
-            continue
+    # Pillow로 이미지 열고 그레이스케일 변환
+    img = Image.open(image_path)
+    if img.mode != "L":
+        img = img.convert("L")
     
-    if pdf_doc.page_count > 0:
-        pdf_doc.save(output_pdf)
+    # 임시로 PNG 바이트로 변환 (PyMuPDF에 삽입하기 위해)
+    import io
+    img_bytes = io.BytesIO()
+    img.save(img_bytes, format="PNG")
+    img_bytes.seek(0)
+    
+    # 이미지 크기에 맞춰 PDF 페이지 생성 (72 DPI 기준, Pillow 픽셀 → 포인트)
+    # 이미지가 잘리지 않도록 원본 크기 그대로 사용
+    width_pt = img.width * 72 / 96  # 96 DPI 가정 (일반적 화면 DPI)
+    height_pt = img.height * 72 / 96
+    
+    page = pdf_doc.new_page(width=width_pt, height=height_pt)
+    rect = fitz.Rect(0, 0, width_pt, height_pt)
+    page.insert_image(rect, stream=img_bytes.read())
+    
+    pdf_doc.save(output_pdf)
     pdf_doc.close()
 
 
@@ -215,13 +207,11 @@ def walk_and_convert(root: str) -> None:
     else:
         print(f"[INFO] Ghostscript 미발견 → PyMuPDF 래스터 변환으로 진행 (목표 가로: {TARGET_GRAYSCALE_WIDTH_PX}px)")
     
-    print(f"[INFO] 지원 형식: PDF (개별 변환), 이미지 (폴더별 묶어서 PDF로)")
+    print(f"[INFO] 지원 형식: PDF (개별 변환), 이미지 (개별로 PDF 변환)")
 
     processed = set()  # realpath 기반 중복 방지
     total_pdf = converted_pdf = skipped_pdf = 0
-    
-    # 폴더별로 이미지 수집
-    folder_images: dict[str, list[str]] = {}
+    total_img = converted_img = skipped_img = 0
     
     for dirpath, dirnames, filenames in os.walk(root):
         for name in filenames:
@@ -235,6 +225,7 @@ def walk_and_convert(root: str) -> None:
             processed.add(rsrc)
             
             ext = os.path.splitext(name)[1].lower()
+            base_name = os.path.splitext(name)[0]
             
             # PDF는 개별 처리
             if ext == ".pdf":
@@ -257,51 +248,39 @@ def walk_and_convert(root: str) -> None:
                 else:
                     print(f"[ERR]  {src}")
             
-            # 이미지는 폴더별로 수집
+            # 이미지는 개별로 PDF로 변환
             elif ext in IMAGE_EXTENSIONS:
                 # 이미 흑백- 접두사가 있으면 스킵
                 if name.startswith(TARGET_PREFIX):
+                    skipped_img += 1
                     print(f"[SKIP] {src} (이미 변환됨)")
                     continue
                 
-                if dirpath not in folder_images:
-                    folder_images[dirpath] = []
-                folder_images[dirpath].append(src)
-    
-    # 각 폴더별로 수집된 이미지들을 하나의 PDF로 변환
-    total_img = 0
-    converted_img = 0
-    for folder, img_list in folder_images.items():
-        if not img_list:
-            continue
-        
-        total_img += len(img_list)
-        output_pdf = os.path.join(folder, IMAGES_PDF_NAME)
-        
-        # 이미 존재하면 스킵
-        if os.path.exists(output_pdf):
-            print(f"[SKIP] 이미지 PDF가 이미 존재: {output_pdf}")
-            continue
-        
-        try:
-            print(f"[INFO] {len(img_list)}개 이미지를 PDF로 결합: {output_pdf}")
-            convert_images_to_pdf(img_list, output_pdf)
-            print(f"[OK]   이미지 PDF 생성: {output_pdf}")
-            
-            # 성공적으로 PDF 생성 후 원본 이미지 삭제
-            for img_path in img_list:
+                # 출력 파일명: 흑백-<원본파일명>.pdf
+                dst = os.path.join(dirpath, f"{TARGET_PREFIX}{base_name}.pdf")
+                total_img += 1
+                
+                # 이미 존재하면 스킵
+                if os.path.exists(dst):
+                    skipped_img += 1
+                    print(f"[SKIP] {src} (출력 파일 존재)")
+                    continue
+                
                 try:
-                    os.remove(img_path)
-                    print(f"[삭제] {img_path}")
+                    convert_image_to_pdf(src, dst)
                     converted_img += 1
+                    print(f"[OK]   {src} -> {dst}")
+                    # 성공적으로 PDF 생성 후 원본 이미지 삭제
+                    try:
+                        os.remove(src)
+                    except Exception as e:
+                        print(f"원본 삭제 실패: {src} ({e})", file=sys.stderr)
                 except Exception as e:
-                    print(f"원본 삭제 실패: {img_path} ({e})", file=sys.stderr)
-        except Exception as e:
-            print(f"[ERR] 이미지 PDF 생성 실패: {output_pdf} ({e})", file=sys.stderr)
+                    print(f"[ERR] 이미지 PDF 생성 실패: {src} -> {dst} ({e})", file=sys.stderr)
 
     print("\n--- 요약 ---")
     print(f"PDF: 총 {total_pdf}개 | 변환 {converted_pdf}개 | 스킵 {skipped_pdf}개")
-    print(f"이미지: 총 {total_img}개 | 변환 {converted_img}개 | PDF {len(folder_images)}개 생성")
+    print(f"이미지: 총 {total_img}개 | 변환 {converted_img}개 | 스킵 {skipped_img}개")
 
 
 def main(argv: list[str] | None = None) -> int:
