@@ -31,7 +31,7 @@ from pathlib import Path
 # -------- 설정 --------
 ROOT_DIR = "."  # 기본 시작 폴더 (커맨드라인 인수로 덮어쓸 수 있음)
 TARGET_PREFIX = "흑백-"  # 출력 파일 접두사
-TARGET_GRAYSCALE_WIDTH_PX = 4096  # PyMuPDF 래스터 변환 시 목표 가로 픽셀
+TARGET_GRAYSCALE_WIDTH_PX = 2048  # PyMuPDF 래스터 변환 시 목표 가로 픽셀
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}  # 지원 이미지 확장자
 IMAGES_PDF_NAME = "흑백-images.pdf"  # 이미지들을 묶은 PDF 파일명
 # ----------------------
